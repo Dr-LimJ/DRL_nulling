@@ -1,0 +1,28 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Results and logs
+results/
+logs/
+checkpoints/
+outputs/
+
+# Training artifacts
+*.pth
+*.pt
+*.pkl
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Temporary files
+temp.py
+*.tmp
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
