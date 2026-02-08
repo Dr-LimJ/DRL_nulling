@@ -133,7 +133,7 @@ class PPOAgent:
         self.critic = CriticNetwork(state_size).to(device)
         
         # Optimizers
-        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=learning_rate)
+        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=3*learning_rate)
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=3*learning_rate)
         
         # Experience buffer
