@@ -51,7 +51,7 @@ class ActorNetwork(nn.Module):
         log_std = self.log_std_head(features)
         
         # Clamp log_std for stability
-        # log_std = torch.clamp(log_std, min=-5.0, max=-0.5)
+        log_std = torch.clamp(log_std, min=-5.0, max=-0.5)
         
         return mean, log_std
 
@@ -109,6 +109,8 @@ class PPOAgent:
         n_epochs: int = 10,
         buffer_size: int = 2048,
         debug_verbose: int = 10,
+        target_kl: float = 0.015,
+        total_updates: int = 4000,
     ):
         self.device = device
         self.state_size = state_size
@@ -127,14 +129,24 @@ class PPOAgent:
         self.n_epochs = n_epochs
         self.buffer_size = buffer_size
         self.debug_verbose = debug_verbose
+        self.target_kl = target_kl
+        self.total_updates = total_updates
         
         # Networks
         self.actor = ActorNetwork(state_size, action_size).to(device)
         self.critic = CriticNetwork(state_size).to(device)
         
         # Optimizers
-        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=3*learning_rate)
+        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=learning_rate)
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=3*learning_rate)
+
+        # Learning rate schedulers (linear decay to 0)
+        self.actor_scheduler = optim.lr_scheduler.LambdaLR(
+            self.actor_optimizer, lr_lambda=lambda step: max(1.0 - step / total_updates, 0.0)
+        )
+        self.critic_scheduler = optim.lr_scheduler.LambdaLR(
+            self.critic_optimizer, lr_lambda=lambda step: max(1.0 - step / total_updates, 0.0)
+        )
         
         # Experience buffer
         self.buffer = {
@@ -298,14 +310,16 @@ class PPOAgent:
         total_critic_loss = 0.0
         total_kl = 0.0
         
+        early_stopped = False
         for epoch in range(self.n_epochs):
             # Create mini-batches
             indices = np.random.permutation(self.buffer_size)
             num_batches = self.buffer_size // self.batch_size
-            
+
+            epoch_kl = 0.0
             for batch in range(num_batches):
                 batch_indices = indices[batch * self.batch_size:(batch + 1) * self.batch_size]
-                
+
                 batch_states = states[batch_indices]
                 batch_actions = actions[batch_indices]
                 batch_rewards = rewards[batch_indices]
@@ -313,34 +327,46 @@ class PPOAgent:
                 batch_dones = dones[batch_indices]
                 batch_advantages = advantages[batch_indices]
                 batch_old_log_probs = old_log_probs[batch_indices]
-                
+
                 # Update actor
-                debug_this = (epoch == 0 and batch == 0 and 
+                debug_this = (epoch == 0 and batch == 0 and
                              self.update_count < self.debug_verbose)
                 actor_loss, kl = self._update_actor(
-                    batch_states, batch_actions, batch_advantages, 
+                    batch_states, batch_actions, batch_advantages,
                     batch_old_log_probs, debug_this
                 )
-                
+
                 # Update critic
                 critic_loss = self._update_critic(
                     batch_states, batch_rewards, batch_next_states, batch_dones
                 )
-                
+
                 total_actor_loss += actor_loss
                 total_critic_loss += critic_loss
                 total_kl += kl
+                epoch_kl += kl
+
+            # KL-based early stopping
+            avg_epoch_kl = epoch_kl / num_batches
+            if avg_epoch_kl > self.target_kl:
+                early_stopped = True
+                break
         
-        # Average losses
-        avg_actor_loss = total_actor_loss / (self.n_epochs * num_batches)
-        avg_critic_loss = total_critic_loss / (self.n_epochs * num_batches)
-        avg_kl = total_kl / (self.n_epochs * num_batches)
+        # Average losses (account for early stopping)
+        actual_epochs = epoch + 1
+        avg_actor_loss = total_actor_loss / (actual_epochs * num_batches)
+        avg_critic_loss = total_critic_loss / (actual_epochs * num_batches)
+        avg_kl = total_kl / (actual_epochs * num_batches)
         
         # Store losses
         self.actor_losses.append(avg_actor_loss)
         self.critic_losses.append(avg_critic_loss)
         self.kl_history.append(avg_kl)
         
+        # Step learning rate schedulers
+        self.actor_scheduler.step()
+        self.critic_scheduler.step()
+
         # Clear buffer
         self.buffer = {key: [] for key in self.buffer.keys()}
         self.update_count += 1
@@ -352,6 +378,9 @@ class PPOAgent:
             print(f"  Actor Loss: {avg_actor_loss:.4f}")
             print(f"  Critic Loss: {avg_critic_loss:.4f}")
             print(f"  Avg KL Divergence: {avg_kl:.6f}")
+            print(f"  Epochs: {actual_epochs}/{self.n_epochs}" +
+                  (" (early stopped)" if early_stopped else ""))
+            print(f"  LR: {self.actor_scheduler.get_last_lr()[0]:.6f}")
             print("=" * 50)
         
         return avg_actor_loss, avg_critic_loss
@@ -436,12 +465,12 @@ class PPOAgent:
         entropy_loss = -self.entropy_coeff * entropy
         
         # Total actor loss
-        # actor_loss = clip_loss + entropy_loss
-        actor_loss = clip_loss
+        actor_loss = clip_loss + entropy_loss
 
         # Update actor
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
+        nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=0.5)
         self.actor_optimizer.step()
         
         return actor_loss.item(), kl_div.item()
@@ -530,6 +559,7 @@ class PPOAgent:
         # Update critic
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
+        nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=0.5)
         self.critic_optimizer.step()
         
         return critic_loss.item()
@@ -578,7 +608,7 @@ class PPOAgent:
     
     def load(self, filepath: str):
         """Load agent"""
-        checkpoint = torch.load(filepath, map_location=self.device)
+        checkpoint = torch.load(filepath, map_location=self.device, weights_only=False)
         self.actor.load_state_dict(checkpoint['actor_state_dict'])
         self.critic.load_state_dict(checkpoint['critic_state_dict'])
         self.actor_optimizer.load_state_dict(checkpoint['actor_optimizer_state_dict'])

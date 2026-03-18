@@ -18,6 +18,7 @@ class RADARDynamic(gym.Env):
         isr_db: float = 10.0,
         num_interferers: int = 1,
         output_mode: str = 'triu_norm',
+        gain_mode: str = 'peak',
         angle_min: float = -40.0,
         angle_max: float = 40.0,
         max_steps: int = 1000,
@@ -37,6 +38,7 @@ class RADARDynamic(gym.Env):
         self.isr_db = isr_db
         self.num_interferers = num_interferers
         self.output_mode = output_mode
+        self.gain_mode = gain_mode
         
         # Angle boundaries
         self.angle_min = angle_min
@@ -295,29 +297,32 @@ class RADARDynamic(gym.Env):
             a_theta = self._steer_vector(angle)
             AF_all[idx] = np.abs(w.conj() @ a_theta) ** 2
         
-        # Maximum gain for normalization (avoid division by zero)
+        # Reference gain
         max_gain = max(np.max(AF_all), 1e-10)
-        AF_pattern_dB = 10 * np.log10(AF_all / max_gain + 1e-10)
-        
-        # Desired signal gain
-        a_D = self._steer_vector(theta_deg)
-        AF_desired = w.conj() @ a_D
-        Gain_desired_norm = np.abs(AF_desired) ** 2 / max_gain
-        
-        # Interference gain (sum of all interferers)
-        Gain_interference_norm = 0.0
+        if self.gain_mode == 'directivity':
+            ref_gain = max(np.mean(AF_all), 1e-10)
+        else:  # 'peak'
+            ref_gain = max_gain
+        AF_pattern_dB = 10 * np.log10(AF_all / ref_gain + 1e-10)
+
+        # Desired signal gain - lookup from AF_all
+        desired_idx = int(round((theta_deg + 90) / 0.1))
+        desired_idx = np.clip(desired_idx, 0, len(angles) - 1)
+        PD = AF_all[desired_idx] / ref_gain
+        PD_dB = 10 * np.log10(max(PD, 1e-10))
+
+        # Interference gain - lookup from AF_all
+        PI_total = 0.0
         PI_dB_single = []
-        
+
         for q in range(self.num_interferers):
-            a_i = self._steer_vector(self.int_angles_deg[q])
-            AF_interference = w.conj() @ a_i
-            gain_i = np.abs(AF_interference) ** 2 / max_gain
-            Gain_interference_norm += gain_i
-            PI_dB_single.append(10 * np.log10(max(gain_i, 1e-10)))
-        
-        # Convert to dB
-        PD_dB = 10 * np.log10(max(Gain_desired_norm, 1e-10))
-        PI_dB = 10 * np.log10(max(Gain_interference_norm, 1e-10))
+            int_idx = int(round((self.int_angles_deg[q] + 90) / 0.1))
+            int_idx = np.clip(int_idx, 0, len(angles) - 1)
+            PI_q = AF_all[int_idx] / ref_gain
+            PI_total += PI_q
+            PI_dB_single.append(10 * np.log10(max(PI_q, 1e-10)))
+
+        PI_dB = 10 * np.log10(max(PI_total, 1e-10))
         SIR_dB = PD_dB - PI_dB
         
         return {

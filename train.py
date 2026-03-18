@@ -25,8 +25,8 @@ class Trainer:
         agent: PPOAgent,
         angle_threshold: float = 10.0,
         penalty_reward: float = -10.0,
-        pd_threshold: float = -5.0,
-        eta_rl: float = -15.0,
+        pd_threshold: float = 0.0,
+        eta_rl: float = -10.0,
         save_dir: str = './results',
     ):
         self.env = env
@@ -67,12 +67,10 @@ class Trainer:
         PI_dB = eval_info['PI_dB']
         
         # Check constraints
-        # if PD_dB <= self.pd_threshold or PI_dB >= self.eta_rl:
-        #     return self.penalty_reward
-        # else:
-        #     return eval_info['SIR_dB']
-
-        return eval_info['SIR_dB']
+        if PD_dB <= self.pd_threshold or PI_dB >= self.eta_rl:
+            return self.penalty_reward
+        else:
+            return eval_info['SIR_dB']
 
     
     def check_angle_threshold(self, state_info: dict) -> bool:
@@ -88,7 +86,7 @@ class Trainer:
 
         options = {
             'int_angles_deg': [0.0],
-            'desired_angle': 20.0
+            # 'desired_angle': 20.0
         }
         
         state, info = self.env.reset(options=options)
@@ -393,8 +391,9 @@ def main():
         num_interferers=1,
         output_mode='triu_norm',
         max_steps=1024,
-        desired_delta_deg=0.0,
+        desired_delta_deg=1.0,
         int_delta_deg=0.0,
+        gain_mode='directivity'
     )
     
     # Create agent
@@ -413,7 +412,7 @@ def main():
         buffer_size=2048,
         batch_size=128,
         n_epochs=10,
-        debug_verbose=10,
+        debug_verbose=3,
     )
     
     # Create trainer
@@ -422,12 +421,12 @@ def main():
         agent=agent,
         angle_threshold=10.0,
         penalty_reward=-10.0,
-        eta_rl=-15.0,
-        pd_threshold=-5.0
+        eta_rl=-10.0,
+        pd_threshold=0.0
     )
     
     # Train
-    trainer.train(num_episodes=500, log_interval=3)
+    trainer.train(num_episodes=12000, log_interval=3)
     
     print("\n" + "=" * 60)
     print("Training completed successfully!")
