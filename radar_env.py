@@ -73,11 +73,13 @@ class RADARDynamic(gym.Env):
         )  # shape: (len(angles), M)
 
         # Define spaces
+        # Observation is the steered covariance Gamma' = D·Gamma·D^H, so theta_D
+        # is implicit in the transform and not part of the state.
         if output_mode == 'triu_norm':
             K = num_elements * (num_elements + 1) // 2
-            state_size = 1 + 2 * K  # theta_norm + real(z) + imag(z)
+            state_size = 2 * K  # real(z) + imag(z)
         else:
-            state_size = 1 + 2 * num_elements * num_elements
+            state_size = 2 * num_elements * num_elements
         
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(state_size,), dtype=np.float32
@@ -198,7 +200,7 @@ class RADARDynamic(gym.Env):
     def _get_observation(self) -> np.ndarray:
         """Get current observation"""
         theta_deg = self.desired_angle
-        
+
         # Compute or retrieve Gamma
         if self.current_gamma is None or self.current_theta != theta_deg:
             Gamma = self._compute_gamma(theta_deg)
@@ -206,35 +208,25 @@ class RADARDynamic(gym.Env):
             self.current_theta = theta_deg
         else:
             Gamma = self.current_gamma
-        
-        # Normalize angle to [-1, 1]
-        theta_norm = theta_deg / 90.0
-        
+
+        # Steer to desired direction: Gamma' = D · Gamma · D^H, D = diag(a*(theta_D))
+        # In the transformed frame, the desired signal sits at broadside,
+        # so the agent doesn't need theta_D as an input.
+        a_D = self._steer_vector(theta_deg)
+        d = a_D.conj()
+        Gamma_prime = (d[:, None] * Gamma) * d.conj()[None, :]
+
         if self.output_mode == 'triu_norm':
-            # Extract upper triangular elements
             M = self.num_elements
             triu_indices = np.triu_indices(M)
-            z = Gamma[triu_indices]
-            
-            # Normalize
+            z = Gamma_prime[triu_indices]
             z_norm = z / (np.linalg.norm(z) + 1e-8)
-            
-            # Construct observation
-            obs = np.concatenate([
-                [theta_norm],
-                z_norm.real,
-                z_norm.imag
-            ])
+            obs = np.concatenate([z_norm.real, z_norm.imag])
         else:
-            # Full matrix mode
-            Gamma_flat = Gamma.flatten()
+            Gamma_flat = Gamma_prime.flatten()
             Gamma_norm = Gamma_flat / (np.linalg.norm(Gamma_flat) + 1e-8)
-            obs = np.concatenate([
-                [theta_norm],
-                Gamma_norm.real,
-                Gamma_norm.imag
-            ])
-        
+            obs = np.concatenate([Gamma_norm.real, Gamma_norm.imag])
+
         return obs.astype(np.float32)
     
     def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, Dict]:
@@ -290,12 +282,15 @@ class RADARDynamic(gym.Env):
     def evaluate(self, action: np.ndarray) -> Dict:
         """Evaluate beamforming weights"""
         M = self.num_elements
-        
-        # Parse action to complex weights
-        w = action[:M] + 1j * action[M:2*M]
-        w = w / (np.linalg.norm(w) + 1e-8)  # Normalize
-        
+
+        # Action is a unit-norm weight w' in the steered (broadside) frame.
+        # Inverse-transform to the physical weight: w = D^H · w' = a(theta_D) ⊙ w'.
+        w_prime = action[:M] + 1j * action[M:2*M]
+        w_prime = w_prime / (np.linalg.norm(w_prime) + 1e-8)
+
         theta_deg = self.desired_angle
+        a_D = self._steer_vector(theta_deg)
+        w = a_D * w_prime
 
         # Compute array pattern (vectorized)
         angles = self._eval_angles
