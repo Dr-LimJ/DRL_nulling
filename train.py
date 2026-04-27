@@ -393,7 +393,7 @@ def main():
         max_steps=1024,
         desired_delta_deg=1.0,
         int_delta_deg=0.0,
-        gain_mode='directivity'
+        gain_mode='peak'
     )
     
     # Create agent
@@ -421,8 +421,8 @@ def main():
         agent=agent,
         angle_threshold=10.0,
         penalty_reward=-10.0,
-        eta_rl=-10.0,
-        pd_threshold=0.0
+        eta_rl=-15.0,
+        pd_threshold=-5.0
     )
     
     # Train

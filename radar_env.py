@@ -63,7 +63,15 @@ class RADARDynamic(gym.Env):
         
         # Generate LFM reference signal
         self._generate_lfm_reference()
-        
+
+        # Precompute steering matrix over evaluation angle grid (vectorized evaluate)
+        self._eval_angles = np.arange(-90, 90.1, 0.1)
+        u = np.sin(np.deg2rad(self._eval_angles))
+        n = np.arange(num_elements)
+        self._eval_A = np.exp(
+            1j * 2 * np.pi * self.d_over_lambda * np.outer(u, n)
+        )  # shape: (len(angles), M)
+
         # Define spaces
         if output_mode == 'triu_norm':
             K = num_elements * (num_elements + 1) // 2
@@ -288,14 +296,10 @@ class RADARDynamic(gym.Env):
         w = w / (np.linalg.norm(w) + 1e-8)  # Normalize
         
         theta_deg = self.desired_angle
-        
-        # Compute array pattern
-        angles = np.arange(-90, 90.1, 0.1)
-        AF_all = np.zeros(len(angles))
-        
-        for idx, angle in enumerate(angles):
-            a_theta = self._steer_vector(angle)
-            AF_all[idx] = np.abs(w.conj() @ a_theta) ** 2
+
+        # Compute array pattern (vectorized)
+        angles = self._eval_angles
+        AF_all = np.abs(self._eval_A @ w.conj()) ** 2
         
         # Reference gain
         max_gain = max(np.max(AF_all), 1e-10)
