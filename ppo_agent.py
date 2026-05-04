@@ -297,19 +297,23 @@ class PPOAgent:
         
         # Compute advantages using GAE
         advantages = self._compute_gae(rewards, old_values, old_next_values, dones)
-        
+
         # Debug advantage statistics (first few updates)
         if self.update_count < self.debug_verbose:
             self._debug_advantages(advantages)
-        
+
+        # Precompute fixed TD targets before epoch loop (returns = r + γ·V_old(s'))
+        # Equivalent to advantage + old_values, but frozen as numpy → stable across all 160 steps
+        returns = advantages + old_values
+
         # Normalize advantages (IMPORTANT!)
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-        
+
         # Multiple epochs of updates
         total_actor_loss = 0.0
         total_critic_loss = 0.0
         total_kl = 0.0
-        
+
         early_stopped = False
         for epoch in range(self.n_epochs):
             # Create mini-batches
@@ -322,11 +326,9 @@ class PPOAgent:
 
                 batch_states = states[batch_indices]
                 batch_actions = actions[batch_indices]
-                batch_rewards = rewards[batch_indices]
-                batch_next_states = np.array(self.buffer['next_states'])[batch_indices]
-                batch_dones = dones[batch_indices]
                 batch_advantages = advantages[batch_indices]
                 batch_old_log_probs = old_log_probs[batch_indices]
+                batch_returns = returns[batch_indices]
 
                 # Update actor
                 debug_this = (epoch == 0 and batch == 0 and
@@ -336,9 +338,9 @@ class PPOAgent:
                     batch_old_log_probs, debug_this
                 )
 
-                # Update critic
+                # Update critic with frozen TD targets
                 critic_loss = self._update_critic(
-                    batch_states, batch_rewards, batch_next_states, batch_dones
+                    batch_states, batch_returns
                 )
 
                 total_actor_loss += actor_loss
@@ -532,36 +534,20 @@ class PPOAgent:
     def _update_critic(
         self,
         states: np.ndarray,
-        rewards: np.ndarray,
-        next_states: np.ndarray,
-        dones: np.ndarray,
+        returns: np.ndarray,
     ) -> float:
-        """Update critic network with TD(0) loss"""
+        """Update critic with frozen TD targets (returns = r + γ·V_old(s'))"""
         states_tensor = torch.FloatTensor(states).to(self.device)
-        rewards_tensor = torch.FloatTensor(rewards).to(self.device)
-        next_states_tensor = torch.FloatTensor(next_states).to(self.device)
-        dones_tensor = torch.FloatTensor(dones).to(self.device)
-        
-        # Current values
+        returns_tensor = torch.FloatTensor(returns).to(self.device)
+
         values = self.critic(states_tensor).squeeze()
-        
-        # Next values (detached for TD target)
-        with torch.no_grad():
-            next_values = self.critic(next_states_tensor).squeeze()
-            next_values = next_values * (1 - dones_tensor)
-        
-        # TD target
-        td_targets = rewards_tensor + self.gamma * next_values
-        
-        # TD(0) loss
-        critic_loss = 0.5 * ((td_targets - values) ** 2).mean()
-        
-        # Update critic
+        critic_loss = 0.5 * ((returns_tensor - values) ** 2).mean()
+
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
         nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=0.5)
         self.critic_optimizer.step()
-        
+
         return critic_loss.item()
     
     def episode_end(self, episode_reward: float, episode_length: int, avg_sir: float):

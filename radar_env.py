@@ -240,6 +240,9 @@ class RADARDynamic(gym.Env):
     def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, Dict]:
         """Take a step in the environment"""
         self.cur_step += 1
+                
+        # Evaluate action (weights)
+        eval_info = self.evaluate(action)
         
         # Move desired signal with bounce
         self.desired_angle += self.desired_delta_deg * self.desired_direction
@@ -266,9 +269,7 @@ class RADARDynamic(gym.Env):
         
         # Get observation
         obs = self._get_observation()
-        
-        # Evaluate action (weights)
-        eval_info = self.evaluate(action)
+
         
         # Compute reward (will be done in training script)
         reward = 0.0  # Placeholder
