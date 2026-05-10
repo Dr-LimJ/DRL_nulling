@@ -85,7 +85,7 @@ class Trainer:
         """Train for one episode"""
 
         options = {
-            'int_angles_deg': [0.0],
+            # 'int_angles_deg': [0.0],
             # 'desired_angle': 20.0
         }
         
@@ -392,7 +392,7 @@ def main():
         output_mode='triu_norm',
         max_steps=1024,
         desired_delta_deg=1.0,
-        int_delta_deg=0.0,
+        int_delta_deg=1.0,
         gain_mode='peak'
     )
     

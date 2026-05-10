@@ -26,5 +26,6 @@ temp.py
 
 # IDE
 .vscode/
+.omc/
 .idea/
 *.swp
