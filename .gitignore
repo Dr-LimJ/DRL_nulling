@@ -23,8 +23,12 @@ outputs/
 temp.py
 *.tmp
 *.log
+test_trained_model.ipynb
+analyze_training.ipynb
 
 # IDE
 .vscode/
+.omc/
 .idea/
 *.swp
+
